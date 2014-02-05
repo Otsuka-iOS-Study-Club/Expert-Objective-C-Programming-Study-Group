@@ -4,8 +4,8 @@
 [『エキスパート Objective-C プログラミング』](http://www.amazon.co.jp/%E3%82%A8%E3%82%AD%E3%82%B9%E3%83%91%E3%83%BC%E3%83%88Objective-C%E3%83%97%E3%83%AD%E3%82%B0%E3%83%A9%E3%83%9F%E3%83%B3%E3%82%B0-%EF%BC%8DiOS-OS-X%E3%81%AE%E3%83%A1%E3%83%A2%E3%83%AA%E7%AE%A1%E7%90%86%E3%81%A8%E3%83%9E%E3%83%AB%E3%83%81%E3%82%B9%E3%83%AC%E3%83%83%E3%83%89%EF%BC%8D-%E5%9D%82%E6%9C%AC/dp/4844331094/)の勉強会メモ。
 
 ## 第1章 Automatic Reference Counting 
-### 1.1 AutomaticReferenceCountingとは何か?
-### 1.2 メモリ管理/参照カウント
+### [1.1 AutomaticReferenceCountingとは何か?](chapt-1/sect-1-1.md)
+### [1.2 メモリ管理/参照カウント](chapt-1/sect-1-2.md)
 - 1.2.1 概要.......................................2 
 - 1.2.2 メモリ管理の考え方...............................5 
 - 1.2.3 alloc/retain/release/deallocの実装 ......................14 
