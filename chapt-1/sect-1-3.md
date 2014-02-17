@@ -479,7 +479,7 @@ __autoreleasingと「@autoreleasepool」ブロックによって、非常にシ�
 
 この場合、alloc/new/copy/mutableCopyメソッド群以外のメソッドでオブジェクトを取得しているはず。
 
-実はこのとき、ARC有効な状態であれば、コンパイラがメソッド名がalloc/new/copy/mutableCopyで始まっているかチェックして、そうであれば、自動的に戻り値のオブジェクトをautoreleasepoolに登録している。
+実はこのとき、ARC有効な状態であれば、コンパイラがメソッド名がalloc/new/copy/mutableCopyで始まっているかチェックして、そうではない場合、自動的に戻り値のオブジェクトをautoreleasepoolに登録している。
 
 以下のようなソースコードがあったとする。
 
