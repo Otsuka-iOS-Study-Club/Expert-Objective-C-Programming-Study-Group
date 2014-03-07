@@ -928,12 +928,307 @@ NSLog(@"%d", val);
 
 - この仕組みにより、同じ__block 変数にアクセスすることが可能になっている。
 
-
-
 ## 2.3.6 オブジェクトのキャプチャ
+- 次のソースコードは、NSMutableArray クラスのオブジェクトを生成し所有しますが、代入先の__strong 修飾子付き変数のスコープがすぐに終了するため、オブジェクトはすぐに解放、破棄される。
+```
+{
+    id array = [[NSMutableArray alloc] init];
+}
+```
+- この変数array を使用するBlock 構文を書いてみると以下のようになる。
+```
+blk_t blk;
+{
+    id array = [[NSMutableArray alloc] init];
+    blk = [^(id obj) { 
+        [array addObject:obj];
+        NSLog(@"array count = %ld", [array count]);
+    } copy];
+}
+
+blk([[NSObject alloc] init]);
+blk([[NSObject alloc] init]);
+blk([[NSObject alloc] init]);
+```
+- スコープの終了とともに変数array は破棄され強い参照が消失するので、変数array に代入されたNSMutableArray クラスのオブジェクトは解放、破棄されているはずだが、ソースコードの実行結果は次の通りになる。
+```
+array count = 1
+array count = 2
+array count = 3
+```
+- これは、変数array に代入されたNSMutableArray クラスのオブジェクトが、変数スコープを越えて存在していることを意味する。
+- コンパイラによる変換後のソースコードは以下のようになる。
+```
+/* Block 用構造体/関数部分*/
+struct __main_block_impl_0 {
+     struct __block_impl impl;
+     struct __main_block_desc_0* Desc;
+     id __strong array;
+     __main_block_impl_0(void *fp, struct __main_block_desc_0 *desc,
+             id __strong _array, int flags=0) : array(_array) {
+         impl.isa = &_NSConcreteStackBlock;
+         impl.Flags = flags;
+         impl.FuncPtr = fp;
+         Desc = desc;
+     }
+};
+
+static void __main_block_func_0(struct __main_block_impl_0 *__cself, id obj) {
+    id __strong array = __cself->array;
+    [array addObject:obj];
+    NSLog(@"array count = %ld", [array count]);
+}
+
+static void __main_block_copy_0(struct __main_block_impl_0 *dst,
+        struct __main_block_impl_0 *src)
+{
+    _Block_object_assign(&dst->array, src->array, BLOCK_FIELD_IS_OBJECT);
+}
+
+static void __main_block_dispose_0(struct __main_block_impl_0 *src)
+{
+    _Block_object_dispose(src->array, BLOCK_FIELD_IS_OBJECT);
+}
+
+static struct __main_block_desc_0 { (1)
+    unsigned long reserved;
+    unsigned long Block_size;
+    void (*copy)(struct __main_block_impl_0*, struct __main_block_impl_0*);
+    void (*dispose)(struct __main_block_impl_0*);
+} __main_block_desc_0_DATA = {
+    0,
+    sizeof(struct __main_block_impl_0),
+    __main_block_copy_0,
+    __main_block_dispose_0
+};
+```
+
+```
+/* Block 構文、Block 使用部分*/
+blk_t blk;
+{
+    id __strong array = [[NSMutableArray alloc] init];
+
+    blk = &__main_block_impl_0(
+    __main_block_func_0, &__main_block_desc_0_DATA, array, 0x22000000);
+    blk = [blk copy];
+}
+
+(*blk->impl.FuncPtr)(blk, [[NSObject alloc] init]);
+(*blk->impl.FuncPtr)(blk, [[NSObject alloc] init]);
+(*blk->impl.FuncPtr)(blk, [[NSObject alloc] init]);
+
+```
+- NSMutableArray クラスのオブジェクトが代入された、キャプチャされる自動変数arrayはBlock 用の構造体に、__strong 修飾子付きのメンバ変数として入っている。
+
+```
+struct __main_block_impl_0 {
+    struct __block_impl impl;
+    struct __main_block_desc_0* Desc;
+    id __strong array;
+};
+```
+
+- 「1.3.4 　ルール」で説明したとおり、Objective-C では、C 言語の構造体には\_\_strong 修飾子付きの変数を入れることができません。
+- しかし、Objective-C のランタイムライブラリは、Block がスタックからヒープにコピーされるタイミング、およびヒープ上のBlock が破棄されるタイミングを確実に把握できるため、Block 用の構造体に\_\_strong 修飾子または\_\_weak 修飾子付き変数が入っていても、初期化と破棄のために適切に処理することが可能。
+- それには、\_\_main\_block\_desc\_0 構造体(1)に増えているメンバ変数copy とdispose、またそのメンバ変数にポインタとして代入される\_\_main\_block\_copy\_0 関数と\_\_main\_block\_dispose\_0 関数を使用する。
+- このソースコードにおけるBlock 用構造体には、__strong 修飾子付きのオブジェクト型変数array が入っているので、この変数array に代入されているオブジェクトを適切に管理する必要があります。
+- そこで\_\_main\_block\_copy\_0 関数は、\_Block\_object\_assign 関数を使用して、対象のオブジェクトをBlock 用構造体のメンバ変数array に代入し所有します。
+```
+static void __main_block_copy_0(struct __main_block_impl_0 *dst,
+        struct __main_block_impl_0 *src)
+{
+    _Block_object_assign(&dst->array, src->array, BLOCK_FIELD_IS_OBJECT);
+}
+```
+- \_Block\_object\_assign 関数は、対象の構造体メンバ変数にオブジェクトを代入し、retain インスタンスメソッドに相当する関数を呼び出す。
+- また、\_\_main\_block\_dispose\_0 関数は、\_Block\_object\_dispose 関数を使用して、Block 用構造体のメンバ変数array に代入されているオブジェクトを解放する。
+```
+static void __main_block_dispose_0(struct __main_block_impl_0 *src)
+{
+    _Block_object_dispose(src->array, BLOCK_FIELD_IS_OBJECT);
+}
+```
+
+- \_Block\_object\_dispose 関数は、対象の構造体メンバ変数に代入されているオブジェクトの、release インスタンスメソッドに相当する関数を呼び出す。
+
+- \_\_main\_block\_copy\_0 関数（以降copy 関数）と\_\_main\_block\_dispose\_0 関数（以降dispose 関数）、\_\_main\_block\_desc\_0 構造体のメンバ変数copy とdispose にポインタが代入されているが、変換後のソースコードでは、これらの関数が、どこから呼び出されるのか?
+
+- これらの関数は、Block がスタックからヒープにコピーされるとき、またはヒープ上のBlock が破棄されるときに呼び出される。
+    - copy :  関数スタック上のBlock がヒープにコピーされるとき
+        - Block のcopy インスタンスメソッドを呼んだとき
+
+        - 関数の戻り値としてBlock を返したとき
+            - コンパイラが自動的に、copyを呼び出すのと同義の_Block_copy 関数を対象のBlock を引数に呼び出す。
+        - クラスの__strong 修飾子付きid 型もしくはBlock 型メンバ変数にBlock を代入したとき
+            - コンパイラが自動的に、copyを呼び出すのと同義の_Block_copy 関数を対象のBlock を引数に呼び出す。
+        - メソッド名にusingBlock が含まれるCocoa フレームワークのメソッド、またはGrand Central Dispatch のAPI にBlock を渡したとき
+            - そのメソッドや関数内部で、渡されたBlock に対してBlock のcopy インスタンスメソッドもしくは_Block_copy 関数を呼び出す。
+
+    - dispose : 関数ヒープ上のBlock が破棄されるとき
+        - ヒープにコピーされたBlock が解放され、誰からも所有されなくなり破棄されたタイミングで呼び出されます。オブジェクトのdealloc インスタンスメソッドに相当する。
+
+- ソースコード上ではこれらのタイミングでスタック上のBlock がヒープにコピーされるように見えるが、結局のところ**「\_Block\_copy 関数が呼び出されるとき」**に集約されます。
+
+- この仕組みにより、__strong 修飾子付き自動変数を使うことでBlock にキャプチャされたオブジェクトは、変数スコープを越えて存在できる。
+
+- copy 関数とdispose 関数を使用する仕組みは、\_\_block 変数を使用する際にも使われている。
+```
+static void __main_block_copy_0(
+    struct __main_block_impl_0*dst, struct __main_block_impl_0*src)
+{
+    _Block_object_assign(&dst->val, src->val, BLOCK_FIELD_IS_BYREF);
+}
+
+static void __main_block_dispose_0(struct __main_block_impl_0*src)
+{
+    _Block_object_dispose(src->val, BLOCK_FIELD_IS_BYREF);
+}
+```
+- 変換後のソースコードは、Block 用構造体に関する部分はほぼ同じで、違いは次の通り。
+    - オブジェクト: BLOCK_FIELD_IS_OBJECT
+    - \_\_block 変数BLOCK_FIELD_IS_BYREF
+- BLOCK_FIELD_IS_OBJECT とBLOCK_FIELD_IS_BYREFにより、copy 関数とdispose 関数の対象が、オブジェクトなのか__block 変数なのかを区別している。
+
+- しかし、copy 関数でキャプチャしたオブジェクトを所有し、dispose 関数でキャプチャしたオブジェクトを解放したのとまったく同じで、copy 関数で使用している\_\_block 変数を所有し、dispose関数で使用している\_\_block 変数を解放する。
+
+- なお、先ほどのソースコードで、もしBlock のcopy インスタンスメソッドを呼んでいない場合はプログラムの強制終了となる。
+    - キャプチャした__strong 修飾子付きのオブジェクト型自動変数値の所有は、\_Block\_copy 関数が呼び出されるときに限られるので、オブジェクトをキャプチャしていても変数スコープとともに破棄されてしまう。
+
+```
+blk_t blk;
+{
+    id array = [[NSMutableArray alloc] init];
+    blk = ^(id obj) {
+        [array addObject:obj];
+        NSLog(@"array count = %ld", [array count]);
+    };
+}
+
+blk([[NSObject alloc] init]);
+blk([[NSObject alloc] init]);
+blk([[NSObject alloc] init]);
+
+```
+
+- このため、Block からオブジェクト型自動変数を使用する場合は、次の場合以外、Block のcopyインスタンスメソッドを呼ぶことを推奨する。
+    - 関数の戻り値としてBlock を返すとき
+    - クラスの__strong 修飾子付きid 型もしくはBlock 型メンバ変数にBlock を代入するとき
+    - メソッド名にusingBlock が含まれるCocoa フレームワークのメソッド、またはGrand Central Dispatch のAPI にBlock を渡すとき
 
 ## 2.3.7 __block変数とオブジェクト
+\_\_block 指定子は、自動変数であれば、どんな型にも指定することが可能。Objective-C のオブジェクトを代入するための、id 型自動変数に指定すると以下のようになる。
+```
+__block id obj = [[NSObject alloc] init];
+```
+実は、このソースコードは次のソースコードと等価。
+```
+__block id __strong obj = [[NSObject alloc] init];
+```
+- このソースコードをclang で変換すると、次のようなソースコードとなる。
+```
+/* __block 変数用構造体部分*/
+struct __Block_byref_obj_0 {
+    void *__isa;
+    __Block_byref_obj_0 *__forwarding;
+    int __flags;
+    int __size;
+    void (*__Block_byref_id_object_copy)(void*, void*);
+    void (*__Block_byref_id_object_dispose)(void*);
+    __strong id obj;
+};
 
+static void __Block_byref_id_object_copy_131(void *dst, void *src) {
+    _Block_object_assign((char*)dst + 40, *(void * *) ((char*)src + 40), 131);
+}
+
+static void __Block_byref_id_object_dispose_131(void *src) {
+    _Block_object_dispose(*(void * *) ((char*)src + 40), 131);
+}
+```
+
+```
+/* __block 変数宣言部分*/
+__Block_byref_obj_0 obj = {
+    0,
+    &obj,
+    0x2000000,
+    sizeof(__Block_byref_obj_0),
+    __Block_byref_id_object_copy_131,
+    __Block_byref_id_object_dispose_131,
+    [[NSObject alloc] init]
+};
+```
+- \_\_block 変数が、\_\_strong 修飾子付きの、id 型またはオブジェクト型自動変数である場合、Blockと同様なことが行われる。
+    - \_\_block 変数がスタックからヒープにコピーされるときは、\_Block\_object\_assign 関数が使用され、\_\_block 変数に代入されたオブジェクトが所有される。
+    - ヒープ上の\_\_block 変数が破棄されるときは、\_Block\_object\_dispose 関数が使用され、\_\_block変数に代入されたオブジェクトが解放される。
+
+- \_\_weak 修飾子ではどうなるのか?
+- Block で\_\_weak 修飾子付きid 型変数を使用する場合
+```
+blk\_t blk;
+{
+    id array = [[NSMutableArray alloc] init];
+    id __weak array2 = array;
+    blk = [^(id obj) {
+        [array2 addObject:obj];
+        NSLog(@"array2 count = %ld", [array2 count]);
+    } copy];
+}
+
+blk([[NSObject alloc] init]);
+blk([[NSObject alloc] init]);
+blk([[NSObject alloc] init]);
+
+```
+
+このソースコードの実行結果は、「2.3.6 　オブジェクトのキャプチャ」の結果と異なります。
+```
+array2 count = 0
+array2 count = 0
+array2 count = 0
+```
+これは、\_\_strong 修飾子付き変数array が、その変数スコープを終了すると同時に解放、破棄され、\_\_weak 修飾子付き変数array2 にnil が代入されたためである。
+
+\_\_block 指定子と__weak 修飾子を同時に指定する場合
+```
+blk_t blk;
+{
+    id array = [[NSMutableArray alloc] init];
+    __block id __weak array2 = array;
+
+    blk = [^(id obj) {
+        [array2 addObject:obj];
+        NSLog(@"array2 count = %ld", [array2 count]);
+    } copy];
+}
+
+blk([[NSObject alloc] init]);
+blk([[NSObject alloc] init]);
+blk([[NSObject alloc] init]);
+
+```
+このソースコードの実行結果も、先ほどと同じ。
+
+```
+array2 count = 0
+array2 count = 0
+array2 count = 0
+```
+\_\_block 指定子が付いていても、\_\_strong 修飾子付き変数array が、その変数スコープを終了すると同時に解放、破棄され、\_\_weak 修飾子付き変数array2 にnil が代入されるため。
+
+なお、\_\_unsafe\_unretained 修飾子付き変数は単なるポインタと同じなので、Block から使用する場合も、\_\_block 変数に付加する場合も、\_\_strong 修飾子や\_\_weak 修飾子のような処理は行われない。
+\_\_unsafe\_unretained 修飾子付変数を使用する際は、dangling pointer による、破棄されたはずのオブジェクトへのアクセスに注意する必要がある。
+
+\_\_autoreleasing 修飾子は、Block との同時使用は想定された使用方法ではないため、そもそも使用する必要はありません。\_\_block 指定子と同時に使用した場合、コンパイルエラーとなる。
+```
+__block id __autoreleasing obj = [[NSObject alloc] init];
+```
+変数obj は、\_\_autoreleasing 修飾子と__block 指定子を同時に指定しているが、これは次のようなコンパイルエラーとなります。
+```
+error: __block variables cannot have __autoreleasing ownership
+__block id __autoreleasing obj = [[NSObject alloc] init];
+```
 ## 2.3.8 Blockによる循環参照
 
 ## 2.3.9 copy/release
