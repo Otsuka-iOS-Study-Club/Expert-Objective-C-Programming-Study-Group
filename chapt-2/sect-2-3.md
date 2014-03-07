@@ -1,7 +1,7 @@
 2.3 Blocks の実装
 =========================
 
-## 2.3.1 Blockの実態
+## <a name="section2.3.1">2.3.1 Blockの実態
 - clangの-rewrite-objcを使い、Block構文を含んだObjective-CをC++に変換して実装を見てみる
 - 下記のBlock構文をC++に変換する
 ```
@@ -613,8 +613,278 @@ blk1 = &__main_block_impl_1(
 	- 同様に、一つのBlockから複数の__blockを使うことができる
 
 ## 2.3.4 Blockの記憶域
+- これまでの説明からBlockと__block変数は、構造体型の自動変数であり、スタック上に生成されたその構造体のインスタンスである
+- また、Blockは_NSConcreateStackBlockクラスというObjective-Cのオブジェクトでもあった
+- _NSConcreateStackBlockに似たクラスが存在する
+	- _NSConcreteStackBlock : スタック上に配置
+	- _NSConcreteGlobalBlock : データ領域(.dataセクション)に配置
+	- _NSConcreteMallocBlock : ヒープに配置
+- Blockが記述される場所によって使い分けられる
+```
+void (^blk)(void) = ^{printf("Global BlockYn");};
+int main()
+{
+/* main() program */
+}
+```
+このコードを変換すると[2.3.1 Blockの実態](#section2.3.1)で説明したようなBlockが生成され、Block用構造体メンバ変数isaは次のように初期化される
+```
+impl.isa = &_NSConcreteGlobalBlock;
+```
+- 大域変数が記述される場所では、自動変数が使用できないため、キャプチャする自動変数も存在しない
+- そのため、Block用構造体インスタンスの内容が実行時の状態に依存しないので、プログラム全体で1つだけインスタンスが存在すれば十分
+
+- Block用構造体インスタンスは自動変数をキャプチャした場合のみ、実行時の状態によってその値が変化する
+- 次のコードでは1つのBlock構文を何度も使用しているが、キャプチャされる自動変数の値はfor ループごとに変化する
+```
+typedef int (^blk_t)(int);
+    for (int rate = 0; rate < 10; ++rate) {
+    blk_t blk = ^(int count){return rate * count;};
+}
+```
+- 次のソースコードのように自動変数をキャプチャしない場合は、Block 用構造体インスタンスは毎回まったく同じものになる
+```
+typedef int (^blk_t)(int);
+    for (int rate = 0; rate < 10; ++rate) {
+    blk_t blk = ^(int count){return count;};
+}
+```
+- つまり、Block 構文を大域変数と同じ場所ではなく関数内で使用したときでも、Block が自動変数をキャプチャしない場合は、Block 用構造体インスタンスをプログラムのデータ領域に配置しても問題ない
+
+- *まとめ*
+
+- 以下のときはBlock は_NSConcreteGlobalBlock クラスのオブジェクトとなる。これ以外のBlock 構文によるBlock は、_NSConcreteStackBlock クラスのオブジェクトとなり、スタック上に配置される
+	- 大域変数が記述される場所にBlock 構文がある場合
+	- Block 構文の式で、キャプチャすべき自動変数を使用していない場合
+- __NSConcreteMallocBlockクラスは？
+- 前節最後の疑問を解決するために使われる。
+	- Block が変数スコープを越えて存在可能な理由
+	- __block 変数用構造体のメンバ変数__forwarding の存在理由
+- 大域変数に配置されているBlock であれば、変数スコープ外からでも、ポインタ経由で安全に使
+用することが可能。しかし、スタックに配置されているBlock では、そのBlock が所属する変
+数スコープが終了すれば、そのBlock も破棄されてしまう。__block 変数もスタックに配置されている
+ので、同じように、その__block 変数が所属する変数スコープが終了すれば、その__block 変数も破
+棄される。
+- これを解決するために、Blocks では、Block と__block 変数をスタックからヒープにコピーする方法を提供してる。スタック上に配置されたBlock を、ヒープ上にコピーすることにより、Block 構文が記述されていた変数スコープが終了しても、ヒープ上のBlock は存在し続けることが可能になる。
+- そのヒープ上にコピーされたBlock は、_NSConcreteMallocBlock クラスのオブジェクトであるように、Block 用構造体インスタンスのメンバ変数isa が書き換えられる。
+
+```
+impl.isa = &_NSConcreteMallocBlock;
+```
+- また、__block 変数用構造体のメンバ変数__forwarding の存在理由は、__block 変数がスタックに配置されていても、ヒープに配置されていても、正しく__block 変数にアクセス可能にするため。
+
+「2.3.5 　__block 変数の記憶域」で詳しく説明しますが、__block 変数がヒープに配置されてい
+る状態でも、スタック上の__block 変数をアクセスする場合があります。その場合でも、スタック上
+の構造体インスタンスのメンバ変数__forwarding が、ヒープ上の構造体インスタンスを指していれ
+ば、スタック上の__block 変数からでも、ヒープ上の__block 変数からでも、正しくアクセスするこ
+とが可能。
+
+- Blocks が提供する、コピーの方法とは?
+- 実は、ARC が有効のときは、多くの場合コンパイラが適切に判断し、Block を自動的にスタックからヒープにコピーするコードを生成します。
+- 例: スタック上のBlockが破棄されてしまうソースコード
+```
+- typedef int (^blk_t)(int);
+blk_t func(int rate)
+{
+    return ^(int count){return rate * count;};
+}
+```
+- このソースコードは、ARC対応コンパイラにより次のようなソースコードに変換される。
+```
+blk_t func(int rate)
+{
+    blk_t tmp = &__func_block_impl_0(
+    __func_block_func_0, &__func_block_desc_0_DATA, rate);
+    tmp = objc_retainBlock(tmp);
+    return objc_autoreleaseReturnValue(tmp);
+}
+```
+- ARC が有効な状態なので、「blk\_t tmp」は、実は、\_\_strong 修飾子が付いた「blk\_t\_\_strong tmp」と同じです。なお、objc4 ランタイムライブラリのruntime/objc-arr.mm を読むとわかりますが、objc_retainBlock 関数の実態は、_Block_copy 関数。つまり、
+```
+tmp = _Block_copy(tmp);
+return objc_autoreleaseReturnValue(tmp);
+```
+- コメントを追加すると、
+```
+/*
+* Block型に相当する変数tmp に、
+* Block構文によるBlock、
+* つまり、スタック上に配置された
+* Block用構造体のインスタンスが代入されている。
+*/
+tmp = _Block_copy(tmp);
+/*
+* _Block_copy関数で、
+* スタック上のBlock がヒープ上にコピーされる。
+* コピー後、ヒープ上のアドレスをポインタとして変数tmp に代入。
+*/
+return objc_autoreleaseReturnValue(tmp);
+/*
+* ヒープ上にあるBlock をObjective-C のオブジェクトとして
+* autoreleasepoolに登録してから、そのオブジェクトを返す。
+*/
+```
+- 関数の戻り値としてBlock を返す場合は、コンパイラが自動的にヒープにコピーしてくれる
+
+- コンパイラが適切に判断できない場合は、手動でcopy インスタンスメソッドを呼び、Block をスタックからヒープにコピーする必要がある
+- コンパイラが適切に判断できない場合とは、以下の場合
+	- メソッドまたは関数の引数に、Block を渡す場合
+	ただし、メソッドまたは関数側で、渡ってきた引数を適切にコピーしている場合は、そのメソッドまたは関数呼び出し前に手動でコピーする必要はありません。次のメソッドや関数は、手動コピー不要です。
+	- Cocoa フレームワークのメソッドで、かつ、メソッド名にusingBlock などが含まれている場合
+	- Grand Central Dispatch のAPI
+- 具体例を挙げると、NSArray クラスのenumerateObjectsUsingBlock インスタンスメソッドや、dispatch_async 関数を使用する場合は、手動コピーは不要
+- 逆に、NSArray クラスのinitWithObjects インスタンスメソッドにBlock を渡す場合は、手動コピーが必要
+
+```
+- (id) getBlockArray
+{
+    int val = 10;
+
+    return [[NSArray alloc] initWithObjects:
+        ^{NSLog(@"blk0:%d", val);},
+        ^{NSLog(@"blk1:%d", val);}, nil];
+}
+```
+- このgetBlockArray メソッドは、スタック上に2 つのBlock を生成し、NSArray クラスのinitWithObjects インスタンスメソッドに渡す。getBlockArray メソッド呼び出し元で、NSArrayオブジェクトから取り出したBlock を実行すると
+```
+id obj = getBlockArray();
+typedef void (^blk_t)(void);
+blk_t blk = (blk_t)[obj objectAtIndex:0];
+blk();
+```
+- このソースコードはblk()、つまりBlock 実行時に例外が発生して、アプリケーションが強制終了する。
+	- getBlockArray 関数の実行終了時に、スタック上のBlock は破棄されているため
+- コンパイラが、コピーが必要であるか否か判断せずに、常にコピーしてしまう戦略も取ることは可能だがBlock をスタックからヒープにコピーするのは、それなりにCPU コストがかかる
+- Block がスタックに配置されたままでも使用できる場合、Block をスタックからヒープにコピーするのは、無駄にCPU を使うことになる。そのため、このような場合のみ、プログラマに手動でコピーさせることにしたと考えられる。
+- このソースコードは、次のように修正すれば動作する。
+```
+- (id) getBlockArray
+{
+    int val = 10;
+
+    return [[NSArray alloc] initWithObjects:
+        [^{NSLog(@"blk0:%d", val);} copy],
+        [^{NSLog(@"blk1:%d", val);} copy], nil];
+}
+```
+- Block 構文に対して、直接copy メソッドを呼ぶことが可能。Block 型変数に対して、copy メソッド呼ぶことも可能。
+```
+typedef int (^blk_t)(int);
+
+blk_t blk = ^(int count){return rate * count;};
+
+blk = [blk copy];
+```
+
+- 既にヒープに配置されたBlock や、プログラムのデータ領域に配置されたBlock に対して、copy メソッドを呼んだ場合、どうなるか?
+	- \_NSConcreteStackBlock : スタックスタックからヒープにコピー
+	- \_NSConcreteGlobalBlock: プログラムのデータ領域何も起こらない
+	- \_NSConcreteMallocBlock: ヒープ参照カウント加算
+- Block がどこに配置されていても、copy メソッドによるコピーで何か悪いことが起こるわけではないので不安な場合は、copy メソッドを呼んでおくとよい。
+
+- 何回もcopy メソッドを呼んでコピーしてしまって平気?
+```
+blk = [[[[blk copy] copy] copy] copy];
+```
+- このコードは、次のようなソースコードであると解釈できる。
+```
+{
+    blk_t tmp = [blk copy];
+    blk = tmp;
+}
+{
+    blk_t tmp = [blk copy];
+    blk = tmp;
+}
+{
+    blk_t tmp = [blk copy];
+    blk = tmp;
+}
+{
+    blk_t tmp = [blk copy];
+    blk = tmp;
+}
+```
+コメントを追加してみましょう。
+```
+{
+    /*
+    * 変数blk に、スタックに配置されたBlock が
+    * 代入されているとする。
+    */
+    blk_t tmp = [blk copy];
+    /*
+    * 変数tmp に、ヒープに配置されたBlock が代入され、
+    * 強い参照によりBlock が所有される。
+    */
+    blk = tmp;
+    /*
+    * 変数blk に、変数tmp のBlock が代入され、
+    * 強い参照によりBlock が所有される。
+    **
+    元々代入されていたBlock は、
+    * スタック上に配置されているので
+    * この代入により影響を受けない。
+    **
+    この時点でBlock の所有者は
+    * 変数blk と変数tmp。
+    */
+}  /*
+    * 変数スコープ終了により、変数tmp が破棄され、
+    * 強い参照が消滅し、所有していたBlock を解放する。
+    *
+    * 変数blk により所有されている状況なので、
+    * Blockは破棄されない。
+    */
+{
+    /*
+    * 変数blk に、ヒープに配置されたBlock が
+    * 代入されている。強い参照により、
+    * Blockを所有している状態。
+    */
+
+    blk_t tmp = [blk copy];
+
+    /*
+    * 変数tmp に、ヒープに配置されたBlock が代入され、
+    * 強い参照によりBlock が所有される。
+    */
+
+    blk = tmp;
+
+    /*
+    * 変数blk への代入が発生するため、
+    * 現在代入されているBlock への強い参照が消滅、
+    * Blockが解放される。
+    *
+    * 変数tmp により所有されている状況なので、
+    * Blockは破棄されない。
+    *
+    * 変数blk に、変数tmp のBlock が代入され、
+    * 強い参照によりBlock が所有される。
+    *
+    * この時点でBlock の所有者は
+    * 変数blk と変数tmp。
+    */
+}  /*
+    * 変数スコープ終了により、変数tmp が破棄され、
+    * 強い参照が消滅し、所有していたBlock を解放する。
+    *
+    * 変数blk により所有されている状況なので、
+    * Blockは破棄されない。
+    */
+/*
+ * 以下繰り返し
+ */
+```
+- このとおり、ARC が有効であれば、問題はない
+
 ## 2.3.5 __block変数の記憶域
+
 ## 2.3.6 オブジェクトのキャプチャ
+
 ## 2.3.7 __block変数とオブジェクト
+
 ## 2.3.8 Blockによる循環参照
+
 ## 2.3.9 copy/release
