@@ -1230,5 +1230,291 @@ error: __block variables cannot have __autoreleasing ownership
 __block id __autoreleasing obj = [[NSObject alloc] init];
 ```
 ## 2.3.8 Blockによる循環参照
+Block から__strong 修飾子付きオブジェクト型自動変数を使用すると、Block がスタックから
+ヒープにコピーされた際に、そのオブジェクトがBlock から所有されることになります。これは、
+容易に循環参照を引き起こす。
+```
+typedef void (^blk_t)(void);
+
+@interface MyObject : NSObject
+{
+    blk_t blk_;                             (1)
+}
+@end
+
+@implementation MyObject
+- (id)init
+{
+    self = [super init];                    (2)
+    blk_ = ^{NSLog(@"self = %@", self);};   (3)
+    return self;
+}
+
+- (void)dealloc
+{
+    NSLog(@"dealloc");
+}
+@end
+
+int main()
+{
+    id o = [[MyObject alloc] init];
+    NSLog(@"%@", o);
+    return 0;
+}
+```
+- MyObject クラスのオブジェクトはBlock を所有している(1)。
+- init インスタンスメソッドで実行されるBlock 構文は、\_\_strong 修飾子付きid 型変数であるself を使用している(2)。
+- さらに、メンバ変数blk_にBlock 構文を代入している(3)ので、Block 構文によりスタック上に生成されるBlock は、この時点でスタックからヒープにコピーされ、使用しているself を所有することになる。
+- self はBlock を所有し、Block はself を所有し、循環参照となる。
+
+このソースコードの場合、コンパイラがコンパイル時に循環参照を検出できるため、コンパイラによって適切に警告される。
+```
+warning: capturing ’self’ strongly in this block is likely to lead
+      to a retain cycle [-Warc-retain-cycles]
+       blk_ = ^{NSLog(@"self = %@", self);};
+                                    ^~~~
+
+note: block will be retained by an object strongly retained by the
+      captured object
+       blk_ = ^{NSLog(@"self = %@", self);};
+       ^~~~
+```
+この循環参照を回避するためには、たとえば__weak 修飾子付き変数を宣言しself を代入して使用する。
+```
+- (id)init
+{
+    self = [super init];
+    id __weak tmp = self;
+    blk_ = ^{NSLog(@"self = %@", tmp);};
+    return self;
+}
+```
+
+このソースコードでは、Block が存在する場合は必ず、そのBlock を所有しているMyObject ク
+ラスのオブジェクト、つまり変数tmp に代入されたself が存在しているので、変数tmp の値がnil
+か否かチェックする必要はない。
+
+iOS4、Snow Leopard 向けアプリケーションでは\_\_weak 修飾子の代わりに\_\_unsafe_
+unretained 修飾子を使用しなければならないが、このソースコードではdangling pointer
+を心配せずに使用することが可能。
+```
+- (id)init
+{
+    self = [super init];
+    id __unsafe_unretained tmp = self;
+    blk_ = ^{NSLog(@"self = %@", tmp);};
+    return self;
+}
+```
+
+なお、次のソースコードは、Block 内でself を使用していないにも関わらず、self をキャプチャ
+して、循環参照になる。
+
+```
+@interface MyObject : NSObject
+{
+    blk_t blk_;
+    id obj_;
+}
+@end
+
+@implementation MyObject
+- (id)init
+{
+    self = [super init];
+    blk_ = ^{NSLog(@"obj_ = %@", obj_);};   (1)
+    return self;
+}
+```
+
+コンパイラによる警告は以下の通りになる。
+```
+warning: capturing ’self’ strongly in this block is likely to lead
+      to a retain cycle [-Warc-retain-cycles]
+       blk_ = ^{NSLog(@"obj_ = %@", obj_);};
+                                    ^~~~
+note: block will be retained by an object strongly retained by the
+      captured object
+        blk_ = ^{NSLog(@"obj_ = %@", obj_);};
+        ^~~~
+```
+コンパイラにとって、Block 構文内で使用している「obj_」(1)は、以下のようにオブジェクト用構造体のメンバ変数であり、「self」をキャプチャすることになる。
+```
+blk_ = ^{NSLog(@"obj_ = %@", self->obj_);};
+```
+このソースコードでも、先ほどと同様に、\_\_weak 修飾子付き変数を宣言しobj_を代入して使用することで回避可能。
+このソースコードでは、先ほどの理由のとおり、\_\_unsafe\_unretained修飾子も安全に使用可能。
+```
+- (id)init
+{
+    self = [super init];
+    id __weak obj = obj_;
+    blk_ = ^{NSLog(@"obj_ = %@", obj);};
+    return self;
+}
+```
+
+もうひとつの循環参照の回避策として、\_\_block 変数を使用する方法もある。
+```
+typedef void (^blk_t)(void);
+
+@interface MyObject : NSObject
+{
+    blk_t blk_;                        (1)
+}
+@end
+
+@implementation MyObject
+- (id)init
+{
+    self = [super init];
+    __block id tmp = self;             (3)
+    
+    blk_ = ^{
+        NSLog(@"self = %@", tmp);      (2)
+        tmp = nil;
+    };
+
+    return self;
+}
+
+- (void)execBlock
+{
+    blk_();
+}
+
+- (void)dealloc
+{
+    NSLog(@"dealloc");
+}
+@end
+
+int main()
+{
+    id o = [[MyObject alloc] init];
+    [o execBlock];
+    return 0;
+}
+```
+
+このソースコードは、循環参照を引き起こさないが、execBlock インスタンスメソッド
+を呼び出さなければ、つまり、メンバ変数blk_に代入されたBlock を実行しなければ、循環参照し
+たままメモリリークする。
+
+- MyObject クラスのオブジェクトを生成し所有した状態では、次のような循環参照になっている。
+    - MyObject クラスのオブジェクトが、Block を所有している (1)
+    - Block が、__block 変数を所有している (2)
+    - \_\_block 変数が、MyObject クラスのオブジェクトを所有している (3)
+- よって、execBlock インスタンスメソッドを実行しなければ、この循環参照状態のまま、メモリリークする。
+- execBlock インスタンスメソッドを実行することで、Block が実行され、__block 変数tmp にnilが代入される。
+- これにより、\_\_block 変数tmp のMyObject クラスのオブジェクトへの強い参照が消滅し、次のように、循環参照が回避される。
+    - MyObject クラスのオブジェクトが、Block を所有している
+    - Block が、__block 変数を所有している
+
+- \_\_block 変数を使った循環参照回避方法の利点・欠点
+
+- \_\_block 変数を使った場合の利点は、次の通り。
+    -  \_\_block 変数によるオブジェクト所有期間をコントロールできる
+    - \_\_weak 修飾子が使えない環境でも、\_\_unsafe\_unretained 修飾子を使わないで済む（dangling
+pointer を心配する必要がない）
+
+=> Block 実行時に、__block 変数にnil もしくは他のオブジェクトを代入するか否か、動的に決定することが可能。
+
+- \_\_block 変数を使った場合の欠点は、次の通り。
+    - 循環参照を回避するために、Block を実行しなければならない
+
+=> Block 構文を実行したものの、Block を実行しないパスが存在した場合、循環参照を回避できなくなる。
+Block により循環参照が発生する場合は、Block の用途に合わせて、\_\_block 変数か、\_\_weak 修飾子または\_\_unsafe\_unretained 修飾子を使用して、循環参照を回避する。
 
 ## 2.3.9 copy/release
+ARC が無効の場合は、Block をスタックからヒープにコピーするには常に手動コピーが必要。
+また、ARC が無効なので、コピーしたBlock を解放する必要がある。
+
+copy インスタンスメソッドでコピーし、release インスタンスメソッドで解放する。
+```
+void (^blk_on_heap)(void) = [blk_on_stack copy];
+```
+
+```
+[blk_on_heap release];
+```
+一度コピーしてヒープに配置されたBlock は、retain インスタンスメソッドで所有することも可
+能。
+```
+[blk_on_heap retain];
+```
+しかし、スタックに配置されたBlock に対してretain インスタンスメソッドを呼んでも、何も起きない。
+```
+[blk_on_stack retain];
+```
+
+Block を所有する際は、常にcopy インスタンスメソッドを使うことを推奨する。
+
+Blocks はC 言語の拡張なので、C 言語でBlock 構文を使用することも可能。
+その場合は、copy/release インスタンスメソッドの代わりに、「Block\_copy 関数」「Block\_release 関数」を使用する。
+使い方および参照カウントの考え方は、Objective-C でのcopy/release インスタンスメソッドと同様。
+```
+void (^blk_on_heap)(void) = Block_copy(blk_on_stack);
+```
+
+```
+Block_release(blk_on_heap);
+```
+
+Block_copy 関数は、これまでの説明に出てきた_Block_copy 関数そのものです。
+C 言語用に用意されたこの関数を、Objective-C のランタイムライブラリから使用している。
+同様に、ヒープ上のBlock が解放される場合は、Objective-C のランタイムライブラリからBlock_release
+関数が呼び出されている。
+
+ARC が無効な場合は、Block による循環参照を避けるために、\_\_block 指定子が使用されていた。
+Block がスタックからヒープにコピーされる際に、Block から使用している変数が、
+\_\_block 指定子付きのid 型またはオブジェクト型自動変数の場合retain されず、\_\_block 指定子な
+しのid 型またはオブジェクト型自動変数の場合retain される、という仕様になっているため。
+
+次のソースコードは、ARC が有効な場合でも無効な場合でも、Block がself を所有し、self がBlock を所有するという循環参照を引き起こす。
+```
+
+typedef void (^blk_t)(void);
+
+@interface MyObject : NSObject
+{
+    blk_t blk_;
+}
+@end
+
+@implementation MyObject
+- (id)init
+{
+    self = [super init];
+    blk_ = ^{NSLog(@"self = %@", self);};  // __blockなし:retainされる
+    return self;
+}
+
+- (void)dealloc
+{
+    NSLog(@"dealloc");
+}
+@end
+
+int main()
+{
+    id o = [[MyObject alloc] init];
+    NSLog(@"%@", o);
+    return 0;
+}
+```
+これを回避するには、__block 変数を使用する。
+```
+- (id)init
+{
+    self = [super init];
+    __block id tmp = self;
+    blk_ = ^{NSLog(@"self = %@", tmp);};
+    return self;
+}
+```
+ARC が有効な場合における、\_\_unsafe\_unretained 修飾子と同じように使用することが可能。
+
+このように、ARC が有効か無効かで__block 指定子の用途が大きく異なってしまっ
+ているので、注意が必要。
