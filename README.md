@@ -53,11 +53,11 @@
 
 ## 第3章 Grand Central Dispatch
 
-### 3.1 Grand Central Dispatch 概要 
+### [3.1 Grand Central Dispatch 概要](chapt-3/sect-3-1.md) 
 - 3.1.1 GrandCentralDispatchとは何か? ......................168 
 - 3.1.2 マルチスレッドプログラミング.........................170
 
-### 3.2 Grand Central Dispatch の API
+### [3.2 Grand Central Dispatch の API](chapt-3/sect-3-2.md)
 - 3.2.1 DispatchQueue ................................175 
 - 3.2.2 dispatch_queue_create ............................180 
 - 3.2.3 MainDispatchQueue/GlobalDispatchQueue ...............185 
