@@ -86,7 +86,83 @@ Concurrent Dispatch Queueは現在実行中の処理を待たないため、blk0
 
 ## 3.2.2 dispatch\_queue\_create
 
+dispatch\_queue\_create関数でDispatch Queueを生成できる。
 
+以下はSerial Dispatch Queueを生成する場合のソースコード。
+
+```objectivec
+dispatch_queue_t mySerialDispatchQueue = dispatch_queue_create("com.example.gcd.MySerialDispatchQueue", NULL);
+```
+
+#### Serial Dispatch Queueの生成数に関する注意点
+
+Serial Dispatch Queueについては、前述のとおり以下の挙動をする。
+
+* 複数のSerial Dispatch Queueを生成した場合、それらのQueueは並列に実行される
+* Serial Dispatch Queueは、システムのリソースが許す限りいくらでも生成可能
+* システムは1つのSerial Dispatch Queueに対して1つのスレッドを割り当て
+
+つまり、Serial Dispatch Queueを大量に生成するとそれだけメモリを消費する。またコンテキストスイッチも大量に発生し、ひいてはシステムの応答性能が大幅に低下する。
+
+よって、Serial Dispatch Queueは、複数のスレッドから同じリソースを更新するようなデータ競合などの問題を置こなさいためだけに使用するように。
+
+* データベースの場合は、1つのテーブルに対して1つのSerial Dispatch Queueを生成
+* ファイルの場合は、1つのファイルもしくは分割可能な1つのファイルブロックに対して1つのSerial Dispatch Queueを生成
+
+逆に、データ競合などの問題が発生しない処理を並列に実行させたい場合にはConcurrent Dispatch Queueを使用する。なお、Concurrent Dispatch Queueについてはいくら生成してもXNUカーネルがうまく行うため、Serial Dispatch Queueのような問題は発生しない。
+
+#### dispatch\_queue\_create関数について
+
+```objectivec
+dispatch_queue_t mySerialDispatchQueue = dispatch_queue_create("com.example.gcd.MySerialDispatchQueue", NULL);
+```
+
+第1引数は、
+
+* Dispatch Queueの名前を指定
+* 逆順FQDNの使用を推奨
+* XcodeやInstrumentsのデバッグ中にDispatch Queue名として表示される
+* アプリケーションのクラッシュ時に生成されるCrashLogにも出力される
+* NULLでも良いがデバッグなどのためにちゃんとつけておきましょう
+
+第2引数は、
+
+* Serial Dispatch Queueを生成したい場合はNULLを指定
+* Concurrent Dispatch Queueを生成したい場合はDISPATCH_QUEUE_CONCURRENTを指定 
+
+戻り値は、Dispatch Queueを表す「dispatch_queue_t型」となる。
+
+#### Dispatch Queueのメモリ管理
+
+生成したDispatch Queueは明示的に開放する必要がある。なぜなら、Dispatch Queueは、BlockのようにObjective-Cのオブジェクトとして扱うための仕組みが入っていないため。
+
+Dispatch Queueの解放は、dispatch\_release関数で行う。
+
+```objectivec
+dispatch_release(mySerialDispatchQueue);
+```
+
+dispatch\_release関数があれば、もちろんdispatch\_retain関数もある。
+
+```objectivec
+dispatch_retain(myConcurrentDispatchQueue);
+```
+
+ところで、以下のようにdispatch\_async関数でConcurrent Dispatch QueueにBlockを追加してすぐにdispatch\_release関数で解放しても大丈夫なのか？
+
+```objectivec
+dispatch_queue_t myConcurrentDispatchQueue = dispatch_queue_create("com.example.gcd.MyConcurrentDispatchQueue", DISPATCH_QUEUE_CONCURRENT);
+
+dispatch_async(myConcurrentDispatchQueue, ^{NSLog(@"block on myConcurrentDispatchQueue");});
+
+dispatch_release(myConcurrentDispatchQueue);
+```
+
+結論として、上記の場合は問題無い。
+
+dispatch\_async関数でDispatch QueueにBlockを追加した時点で、そのBlockがそのDispatch Queueをdispatch\_retain関数で所有することになる。Blockの実行が終了すると、そのBlockがdispatch\_release関数で所有していたDispatch Queueを解放する。
+
+ちなみに、Dispatch Queueの他にも、「create」が名前に入っているAPIはその生成したものが不要になった場合はdispatch\_release関数で解放する必要がある。また、関数やメソッドで生成されたものを受け取った場合はdispatch\_retain関数で所有する必要がある。
 
 ## 3.2.3 Main Dispatch Queue / Global Dispatch Queue
 
