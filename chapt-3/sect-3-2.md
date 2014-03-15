@@ -32,7 +32,7 @@ Dispatch Queueには以下の2種類が存在する。
 |Serial Dispatch Queue     |現在実行中の処理の終了を待つ     |
 |Concurrent Dispatch Queue |現在実行中の処理の終了を待たない |
 
-__TODO:__ 図を載せる
+図3.6はそれぞれのDispatch Queueのイメージ図である。
 
 以下のdispatch_asyncを複数実行するソースコードを実行した場合の動きをそれぞれのDispatch Queueで見てみると・・・
 
@@ -109,7 +109,7 @@ Serial Dispatch Queueについては、前述のとおり以下の挙動をす�
 * データベースの場合は、1つのテーブルに対して1つのSerial Dispatch Queueを生成
 * ファイルの場合は、1つのファイルもしくは分割可能な1つのファイルブロックに対して1つのSerial Dispatch Queueを生成
 
-逆に、データ競合などの問題が発生しない処理を並列に実行させたい場合にはConcurrent Dispatch Queueを使用する。なお、Concurrent Dispatch Queueについてはいくら生成してもXNUカーネルがうまく行うため、Serial Dispatch Queueのような問題は発生しない。
+逆に、データ競合などの問題が発生しない処理を並列に実行させたい場合にはConcurrent Dispatch Queueを使用する。__なお、Concurrent Dispatch Queueについてはいくら生成してもXNUカーネルがうまく行うため、Serial Dispatch Queueのような問題は発生しない。__
 
 #### dispatch\_queue\_create関数について
 
@@ -128,9 +128,9 @@ dispatch_queue_t mySerialDispatchQueue = dispatch_queue_create("com.example.gcd.
 第2引数は、
 
 * Serial Dispatch Queueを生成したい場合はNULLを指定
-* Concurrent Dispatch Queueを生成したい場合はDISPATCH_QUEUE_CONCURRENTを指定 
+* Concurrent Dispatch Queueを生成したい場合はDISPATCH\_QUEUE\_CONCURRENTを指定 
 
-戻り値は、Dispatch Queueを表す「dispatch_queue_t型」となる。
+戻り値は、Dispatch Queueを表す「dispatch\_queue\_t型」となる。
 
 #### Dispatch Queueのメモリ管理
 
@@ -166,15 +166,171 @@ dispatch\_async関数でDispatch QueueにBlockを追加した時点で、そのB
 
 ## 3.2.3 Main Dispatch Queue / Global Dispatch Queue
 
+Dispatch Queueは、3.2.2で説明したdispatch\_queue\_create関数を使って生成する他にも、システムが標準で提供している以下のDispatch Queueを使用することが可能。
 
+* Main Dispatch Queue
+* Global Dispatch Queue
+
+|名前                                        |Dispatch Queueの種類      |説明                         |
+|:-------------------------------------------|:-------------------------|:----------------------------|
+|Main Dispatch Queue                         |Serial Dispatch Queue     | メインスレッドで実行される  |
+|Global Dispatch Queue (High Priority)       |Concurrent Dispatch Queue |実行優先度: 高(最優先)       |
+|Global Dispatch Queue (Default Priority)    |Concurrent Dispatch Queue |実行優先度: 標準             |
+|Global Dispatch Queue (Low Priority)        |Concurrent Dispatch Queue |実行優先度: 低               |
+|Global Dispatch Queue (Background Priority) |Concurrent Dispatch Queue |実行優先度: バックグラウンド |
+
+
+#### Main Dispatch Queue
+
+Main Dispatch Queueとは、以下の性質を持つDispatch Queueである。
+
+* メインスレッドで実行される
+* Serial Dispatch Queueである(メインスレッドは1つしかないため)
+* このDispatch Queueに追加された処理は、メインスレッドのRunLoopで実行される
+* UIの描画更新などメインスレッドでないとできない処理はこのDispatch Queueに追加して行う
+* NSObjectのperformSelectorOnMainThreadインスタンスメソッドによるメソッド実行と同じ挙動
+
+#### Global Dispatch Queue
+
+Global Dispatch Queueとは、以下の性質を持つDispatch Queueである。
+
+* アプリケーション全体から使用可能
+* 実行優先度別に4つ存在
+  - 高優先度(High Priority)
+  - 標準優先度(Default Priority)
+  - 低優先度(Low Priority)
+  - バックグラウンド優先度(Background Priority)
+* Global Dispatch Queue用にXNUカーネルで管理されるスレッドは、それぞれのGlobal Dispatch Queueの実行優先度がそのスレッドの実行優先度になる
+* Global Dispatch Queue用のスレッドはXNUカーネルによりリアルタイム性が保証されているわけではないため、実行優先度はあくまで目安
+
+#### Main Dispatch QueueとGlobal Dispatch Queueの取得方法
+
+```objectivec
+/*
+ * Main Dispatch Queueの取得方法 
+ */
+dispatch_queue_t mainDispatchQueue = dispatch_get_main_queue();
+
+/*
+ * Global Dispatch Queue (高優先度)の取得方法 
+ */
+dispatch_queue_t globalDispatchQueueHigh = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0);
+
+/*
+ * Global Dispatch Queue (標準優先度)の取得方法 
+ */
+dispatch_queue_t globalDispatchQueueDefault = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+
+/*
+ * Global Dispatch Queue (低優先度)の取得方法 
+ */
+dispatch_queue_t globalDispatchQueueLow = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0);
+
+/*
+ * Global Dispatch Queue (バックグラウンド優先度)の取得方法 
+ */
+dispatch_queue_t globalDispatchQueueBackground = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0);
+```
+
+#### Main Dispatch QueueとGlobal Dispatch Queueのメモリ管理
+
+Main Dispatch QueueとGlobal Dispatch Queueについては、dispatch\_retain関数やdispatch\_release関数を実行しても何も起きないし、問題も発生しない。そのため、Concurrent Dispatch Queueを生成して使用するよりもGlobal Dispatch Queueを使用したほうが簡単である。
+
+```objectivec
+/*
+ * 標準優先度のGlobal Dispatch QueueでBlockを実行
+ */
+dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+
+    // 並列実行されても問題ない処理
+    
+    /*
+     * Main Dispatch QueueでBlockを実行
+     */
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // メインスレッドでのみ実行可能な処理
+    });
+});
+```
 
 ## 3.2.4 dispatch\_set\_target\_queue
 
+dispatch\_queue\_create関数で生成されたDispatch Queueは、それがSerial Dispatch QueueであろうがConcurrent Dispatch Queueであろうが実行優先度は標準優先度のGlobal Dispatch Queueと同じになる。
 
+生成したDispatch Queueの実行優先度を変更するには、dispatch\_set\_target\_gueue関数を使用する。
+
+バックグラウンドで動く処理を実行するSerial Dispatch Queueを生成する方法は、次のソースコードの通り。
+
+```objectivec
+dispatch_queue_t mySerialDispatchQueue = dispatch_queue_create("com.example.gcd.MySerialDispatchQueue", NULL);
+
+dispatch_queue_t globalDispatchQueueBackground = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0);
+
+dispatch_set_target_queue(mySerialDispatchQueue, globalDispatchQueueBackground);
+```
+
+第1引数に実行優先度を変更したいDispatch Queueを指定し、第2引数に使用したい実行優先度と同じ優先度のGlobal Dispatch Queueを指定する。
+
+第1引数にシステムが提供するMain Dispatch QueueやGlobal Dispatch Queueを指定すると__何が起こるかわかりません。__これらは指定してはいけません。
+
+#### Dispatch Queueの実行階層
+
+dispatch\_queue\_create関数によるDispatch Queueの指定は、実行優先度を変えるだけでなく、Dispatch Queueの階層構造を作ることが可能。
+
+複数のSerial Dispatch Queueに、dispatch\_set\_target\_queue関数で、ある1つのSerial Dispatch Queueをターゲットに指定すると、並列に実行されるはずのSerial Dispatch Queueが、ターゲットのSerial Dispatch Queue上で同時に1つの処理しか実行されなくなる(図3.12)
 
 ## 3.2.5 dispatch\_after
 
+指定した時間の経過後に処理を実行したい場合は、dispatch\_after関数を使用する。以下は3秒後に指定したBlockをMain Dispatch Queueに追加するソースコード。
 
+```objectivec
+dispatch_time_t time = dispatch_time(DISPATCH_TIME_NOW, 3ull * NSEC_PER_SEC);
+
+dispatch_after(time, dispatch_get_main_queue(), ^{
+    NSLog(@"waited at least three seconds.");
+});
+```
+
+ただし、dispatch_after関数は指定した時間に処理を実行するのではなく、指定した時間にDispatch Queueに追加する点に注意。そのため厳格なタイマーとしては利用できないが、おおざっぱに処理を遅延実行させたい場合は有効。
+
+第1引数は、時間を指定するためのdispatch\_time\_tの値。この値は、dispatch\_time関数やdispatch\_walltime関数を使用して作られる。
+
+第2引数は、処理を追加したいDispatch Queue。
+
+第3引数は、実行したい処理を記述したBlock。
+
+#### dispatch\_time関数について
+
+dispatch\_time関数は、1つ目の引数であるdispatch\_time\_t型の値で指定される時間から、2つ目の引数であるナノ秒単位で指定する時間を経過した時間を取得できる。
+
+1つ目の引数によく使用される値として、現在の時間を表すDISPATCH\_TIME\_NOWがある。
+
+第2引数で時間を指定する場合、数値とNSEC\_PER\_SECの積から、ナノ秒単位の数値を取得できる。（ちなみに、「ull」はC言語の数値リテラルで、型を明示する場合に使う文字列である(「unsigned long long」を表す)）。また、NSEC\_PER\_MSECを使用するとミリ秒単位にすることができる。
+
+#### dispatch\_walltime関数について
+
+dispatch\_walltime関数は、POSIXで使用されているstruct timespec型の時間から、dispatch\_time\_t型の値を生成する。
+
+dispatch\_time関数は相対的な時間を作成する目的でよく使用されるが、dispatch\_walltime関数は絶対的な時間を作成する目的で使われる。
+
+struct timespec型の時間は、NSDateクラスのオブジェクトから作成が可能。以下はNSDateクラスのオブジェクトから、dispatch\_after関数に渡すことができるdispatch\_time\_t型の値を返すソースコードである。
+
+```objectc
+dispatch_time_t getDispatchTimeByDate(NSDate *date)
+{
+    NSTimeInterval interval;
+    double second, subsecond;
+    struct timespec time;
+    dispatch_time_t milestone;
+
+    interval = [date timeIntervalSince1970];
+    subsecond = modf(interval, &second);
+    time.tv_sec = second;
+    time.tv_nsec = subsecond * NSEC_PER_SEC;
+    milestone = dispatch_walltime(&time, 0);
+    return milestone;
+}
+```
 
 ## 3.2.6
 ## 3.2.7
