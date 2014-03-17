@@ -72,7 +72,7 @@
 - 3.2.12 dispatch_once .................................205 
 - 3.2.13 DispatchI/O ..................................206
 
-### 3.3 Grand Central Dispatch の実装
+### [3.3 Grand Central Dispatch の実装](chapt-3/sect-3-3.md)
 - 3.3.1 DispatchQueue ................................207 
 - 3.3.2 DispatchSource ................................211
 

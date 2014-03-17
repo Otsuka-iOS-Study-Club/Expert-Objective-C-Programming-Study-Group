@@ -332,12 +332,12 @@ dispatch_time_t getDispatchTimeByDate(NSDate *date)
 }
 ```
 
-## 3.2.6
-## 3.2.7
-## 3.2.8
-## 3.2.9
-## 3.2.10
-## 3.2.11
-## 3.2.12
-## 3.2.13
+## 3.2.6 Dispatch Group
+## 3.2.7 dispatch\_barrier\_async
+## 3.2.8 dispatch\_sync
+## 3.2.9 dispatch\_apply
+## 3.2.10 dispatch\_suspent / dispatch\_resume
+## 3.2.11 Dispatch Semaphore
+## 3.2.12 dispatch\_once
+## 3.2.13 Dispatch I/O
 
