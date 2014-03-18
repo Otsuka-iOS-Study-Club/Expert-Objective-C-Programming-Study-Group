@@ -333,6 +333,114 @@ dispatch_time_t getDispatchTimeByDate(NSDate *date)
 ```
 
 ## 3.2.6 Dispatch Group
+
+Dispatch Queueに追加した複数の処理がすべて終了してから終了処理を実行したい場合には、Dispatch Groupを使用する。
+
+Global Dispatch Queueに3つBlockを追加し、それらのBlockの実行がすべて終了したらMain Dispatch Queueで終了処理用のBlockが実行される例は以下のようになる。
+
+```objectivec
+dispatch_queue_t queue =
+    dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+dispatch_group_t group = dispatch_group_create();
+
+dispatch_group_async(group, queue, ^{NSLog(@"blk0");});
+dispatch_group_async(group, queue, ^{NSLog(@"blk1");});
+dispatch_group_async(group, queue, ^{NSLog(@"blk2");});
+
+dispatch_group_notify(group,
+    dispatch_get_main_queue(), ^{NSLog(@"done");});
+dispatch_release(group);
+```
+
+このソースコードの実行結果は次のようになる。
+
+```objectivec
+blk1
+blk2
+blk0
+done
+```
+
+blk0~2は複数スレッド上で並列に実行されるが、「done」は必ず最後に出力される。
+
+Dispatch Group を使うことで、すべての並列処理の実行終了を監視することができる。そしてすべての処理の実行終了を検知したら、Dispatch Queue に終了処理を追加することができる。
+
+#### dispatch\_group\_create
+
+dispatch\_group\_create関数でdispatch\_group\_t型のDispatch Groupを生成する。
+
+dispatch\_group\_createによって生成されたDispatch Groupはdispatch\_release関数で解放する必要がある。
+
+#### dispatch\_group\_async
+
+dispatch\_async関数と同じく、指定したDispatch QueueにBlockを追加する。
+
+dispatch\_async関数との違いは、第1引数に生成したDispatch Groupを指定する点。
+
+第2引数で指定されたBlockは、第1引数で指定されたDispatch Groupに所属することになる。
+
+BlockをDispatch Groupに所属させると、そのBlockはそのDispatch Groupをdispatch\_retain関数で所有することになり、Blockの実行が終了するとdispatch_release関数で所有していたDispatch Groupを解放する。
+
+-> Dispatch Groupを使い終わったらすぐさまdispatch\_release関数で開放してかまわない、ということ。
+
+#### dispatch\_group\_notify
+
+Dispatch Groupに追加された処理が全て実行終了した後に実行されるBlockをDispatch Queueに追加する。
+
+第1引数には監視したいDispatch Group、第3引数には全処理実行終了後に実行されるBlock、第2引数にはそのBlockを追加するDispatch Queueを指定する。
+
+#### dispatch\_group\_wait
+
+Dispatch Groupに所属させた全ての処理が終了するまで待機する　(同期処理)。
+
+第1引数には処理待ち対象のDispatch Group、第2引数にはいつまで待つかの時間 (タイムアウト) を指定する (dispatch\_time\_t型)。
+
+下記ソースコードのようにDISPATCH_TIME_FOREVERを使用するとDispatch Groupに所属させた全ての処理が終了するまで永遠に待つことを意味する。途中キャンセル不可。
+
+```objectivec
+dispatch_queue_t queue =
+    dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+dispatch_group_t group = dispatch_group_create();
+
+dispatch_group_async(group, queue, ^{NSLog(@"blk0");});
+dispatch_group_async(group, queue, ^{NSLog(@"blk1");});
+dispatch_group_async(group, queue, ^{NSLog(@"blk2");});
+
+dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
+dispatch_release(group);
+```
+
+dispatch\_after関数のように1秒間待つには次のように指定する。
+
+```objectivec
+dispatch_time_t time = dispatch_time(DISPATCH_TIME_NOW, 1ull * NSEC_PER_SEC);
+long result = dispatch_group_wait(group, time);
+if (result == 0) {
+    /*
+     * Dispatch Groupに所属させたすべての処理の実行が終了した
+     */
+} else {
+    /*
+     * Dispatch Groupに所属させた処理のいずれかが、まだ実行中
+     */
+}
+```
+
+dispatch\_group\_wait関数の戻り値が0以外の場合、指定した時間経過後もDispatch Groupに所属させた処理が実行中であることを意味する。
+
+すなわちDISPATCH\_TIME\_FOREVERを指定した場合は必ず0が戻る。
+
+DISPATCH\_TIME\_NOWを指定するとDispatch Groupに所属させた処理の実行終了を一切待たずに判定することができる。
+
+```objectivec
+long result = dispatch_group_wait(group, DISPATCH_TIME_NOW);
+```
+
+これによりメインスレッドのRunLoopのループごとに、余計な待ち時間を作らずに実行終了しているか否かのチェックが可能となる。
+
+しかしその場合はdispatch\_group\_notify関数でMain Dispatch Queueに終了処理を追加する方がより簡潔になるのでオススメ。
+
+
 ## 3.2.7 dispatch\_barrier\_async
 ## 3.2.8 dispatch\_sync
 ## 3.2.9 dispatch\_apply
