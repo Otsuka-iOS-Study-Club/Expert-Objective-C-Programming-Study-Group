@@ -367,9 +367,9 @@ Dispatch Group を使うことで、すべての並列処理の実行終了を�
 
 ### dispatch\_group\_create
 
-dispatch\_group\_create関数でdispatch\_group\_t型のDispatch Groupを生成する。
+dispatch\_group\_t型のDispatch Groupを生成する。
 
-dispatch\_group\_createによって生成されたDispatch Groupはdispatch\_release関数で解放する必要がある。
+dispatch\_group\_createによって生成されたDispatch Groupは **dispatch\_release関数で解放する必要がある。** 
 
 ### dispatch\_group\_async
 
@@ -630,7 +630,262 @@ dispatch_async(queue, ^{
 
 
 ## 3.2.10 dispatch\_suspent / dispatch\_resume
+
+dispatch\_suspend関数で指定したDispatch Queueをサスペンドさせ、dispatch\_resume関数でレジュームさせることができる。
+
+```objectivec
+dispatch_suspend(queue);
+dispatch_resume(queue);
+```
+
+これらの関数はすでに実行されている処理には影響しない。
+
+サスペンドはDispatch Queueに追加されているが未実行な処理をこれ以降実行させなくし、レジュームはサスペンドしたものをまた実行できるように戻す。
+
+
 ## 3.2.11 Dispatch Semaphore
+
+並列処理におけるデータ不整合を回避するためには **Serial Dispatch Queueやdispatch\_barrier\_async** を使う。
+
+ではより粒度の細かな排他制御が必要な場合はどうすればいいのか？
+
+以下の例は、その順番は気にしないが、すべてのデータをNSMutableArrayに追加したい場合。
+
+```objectivec
+dispatch_queue_t queue =
+    dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+NSMutableArray *array = [[NSMutableArray alloc] init];
+for (int i = 0; i < 100000; ++i) {
+    dispatch_async(queue, ^{
+        [array addObject:[NSNumber numberWithInt:i]];
+    });
+}
+```
+
+このソースコードは実行すると、高確率でメモリ関連のエラーによりアプリケーションが不正終了する。
+
+こんなときに役立つのが、そう、 **Dispatch Semaphore。** 
+* 計数型セマフォ (カウンタを持ったセマフォ)
+* カウンタ0の時は待ち
+* カウンタ1以上のときは1減算して待たずに進む
+
+### dispatch\_semaphore\_create
+* Dispatch Semaphoreを生成
+* 引数： カウンタの初期値
+* dispatch_release関数で要解放
+* dispatch_retain関数による所有も可能
+
+```objectivec
+dispatch_semaphore_t semaphore = dispatch_semaphore_create(1);
+```
+
+### dispatch\_semaphore\_wait
+* Dispatch Semaphoreのカウンタが1以上になるまで待つ
+* カウンタが1以上になったとき関数から返る
+* 第2引数： dispatch_time_t型の値による待ち時間
+* 戻り値： dispatch_group_wait関数と同様に0 (処理実行終了) or others (処理実行未終了)
+
+```objectivec
+dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+```
+
+一例として以下のようになる。
+
+```objectivec
+dispatch_time_t time = dispatch_time(DISPATCH_TIME_NOW, 1ull * NSEC_PER_SEC);
+long result = dispatch_semaphore_wait(semaphore, time);
+if (result == 0) {
+    /*
+     * Dispatch Semaphoreのカウンタが1 以上だったため、
+     * もしくは、指定時間待機中に、
+     * Dispatch Semaphoreのカウンタが1 以上になったため、
+     * Dispatch Semaphoreのカウンタを1 減算した。
+     *
+	 * 排他制御が必要な処理を実行可能
+     */
+} else {
+    /*
+     * Dispatch Semaphoreのカウンタが0 だったため、
+     * 指定時間経過まで待機した
+     */
+}
+```
+
+冒頭のソースコードでDispatch Semaphoreを用いると、
+
+```objectivec
+dispatch_queue_t queue =
+    dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+/*
+* Dispatch Semaphoreを生成。
+*
+* Dispatch Semaphoreのカウンタ初期値を「1」に設定。
+*
+* NSMutableArrayクラスのオブジェクトにアクセスできる
+* スレッドは同時に1 つしかないことを保証する
+*/
+dispatch_semaphore_t semaphore = dispatch_semaphore_create(1);
+NSMutableArray *array = [[NSMutableArray alloc] init];
+for (int i = 0; i < 100000; ++i) {
+    dispatch_async(queue, ^{
+        /*
+         * Dispatch Semaphoreを待機。
+         *
+         * Dispatch Semaphoreのカウンタが1 以上になるまで永遠に待つ
+         */
+        dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+        
+		/*
+         * Dispatch Semaphoreのカウンタが1 以上になったため、
+         * Dispatch Semaphoreのカウンタを1 減算して、
+         * dispatch_semaphore_wait関数から実行が戻った状態。
+         *
+	     * つまり、ここが実行されているときの
+         * Dispatch Semaphoreのカウンタは常に「0」。
+         *
+         * NSMutableArrayクラスのオブジェクトに
+         * アクセスできるスレッドは1 つだけなので
+         * 安全に更新できる。
+         */
+        [array addObject:[NSNumber numberWithInt:i]];
+        
+		/*
+         * 排他制御したい処理が終わったので、
+         * dispatch_semaphore_signal関数で
+         * Dispatch Semaphoreのカウンタを1 加算。
+         *
+         * dispatch_semaphore_wait関数で
+         * Dispatch Semaphoreのカウンタの加算を待っているスレッドがいれば、
+         * そのうちの一番最初から待っていたスレッドが動き出す。
+         */
+        dispatch_semaphore_signal(semaphore);
+    });
+}
+/*
+ * 使い終わったら、本来は次のように
+ * Dispatch Semaphoreを解放する必要がある
+ *
+ * dispatch_release(semaphore);
+ */
+```
+
+ごく一部だけ排他制御が必要な状況でDispatch Semaphoreは威力を発揮する。
+
+
 ## 3.2.12 dispatch\_once
+
+指定した処理をアプリケーション実行中に1度だけ実行することを保証するためのAPI。
+
+以下のようなよくある初期化処理は、
+
+```objectivec
+static int initialized = NO;
+if (initialized == NO)
+{
+    /*
+     * 初期化
+     */
+    initialized = YES;
+}
+```
+
+dispatch\_once関数を使うことで以下のようになる。
+
+```objectivec
+static dispatch_once_t pred;
+dispatch_once(&pred, ^{
+    /*
+     * 初期化
+     */
+});
+```
+
+dispatch\_once関数を使うと、このような初期化処理がマルチスレッド環境下で実行されたとしても、完全に安全であることが保証できる。
+
+特にシングルトンパターンでの、シングルトンオブジェクトを生成する際に有効活用できる。
+
+
 ## 3.2.13 Dispatch I/O
 
+Dispatch I/OとDispatch Dataを用いることで、サイズの大きいファイルの読み込みを複数スレッドによる並列読み込みが可能となる。
+
+1つのファイルを、あるサイズごとにGlobal Dispatch Queueを使用してread/writeする。
+
+```objectivec
+dispatch_async(queue, ^{/* 0～ 8191 バイトまで読み込む処理*/});
+dispatch_async(queue, ^{/* 8192～16383 バイトまで読み込む処理*/});
+dispatch_async(queue, ^{/* 16384～24575 バイトまで読み込む処理*/});
+dispatch_async(queue, ^{/* 24576～32767 バイトまで読み込む処理*/});
+dispatch_async(queue, ^{/* 32768～40959 バイトまで読み込む処理*/});
+dispatch_async(queue, ^{/* 40960～49151 バイトまで読み込む処理*/});
+dispatch_async(queue, ^{/* 49152～57343 バイトまで読み込む処理*/});
+dispatch_async(queue, ^{/* 57344～65535 バイトまで読み込む処理*/});
+```
+
+* AppleによるDispatch I/OとDispatch Dataの使用例 (Apple System Log APIのソースコードから抜粋)
+
+```objectivec
+pipe_q = dispatch_queue_create("PipeQ", NULL);
+pipe_channel = dispatch_io_create(DISPATCH_IO_STREAM, fd, pipe_q, ^(int err){
+    close(fd);
+});
+
+*out_fd = fdpair[1];
+dispatch_io_set_low_water(pipe_channel, SIZE_MAX);
+dispatch_io_read(pipe_channel, 0, SIZE_MAX, pipe_q,
+　　　　　　　　^(bool done, dispatch_data_t pipedata, int err){
+　　　　if (err == 0)
+　　　　{
+　　　　　　　　size_t len = dispatch_data_get_size(pipedata);
+　　　　　　　　if (len > 0)
+　　　　　　　　{
+　　　　　　　　　　　　const char *bytes = NULL;
+　　　　　　　　　　　　char *encoded;
+　　　　　　　　　　　　
+　　　　　　　　　　　　dispatch_data_t md = dispatch_data_create_map(
+　　　　　　　　　　　　　　　　pipedata, (const void **)&bytes, &len);
+　　　　　　　　　　　　encoded = asl_core_encode_buffer(bytes, len);
+　　　　　　　　　　　　asl_set((aslmsg)merged_msg, ASL_KEY_AUX_DATA, encoded);
+　　　　　　　　　　　　free(encoded);
+　　　　　　　　　　　　_asl_send_message(NULL, merged_msg, -1, NULL);
+　　　　　　　　　　　　asl_msg_release(merged_msg);
+　　　　　　　　　　　　dispatch_release(md);
+　　　　　　　　}
+　　　　}
+
+　　　　if (done)
+　　　　{
+　　　　　　　　dispatch_semaphore_signal(sem);
+　　　　　　　　dispatch_release(pipe_channel);
+　　　　　　　　dispatch_release(pipe_q);
+　　　　}
+});
+```
+
+### dispatch_io_create
+* Diapatch I/Oを生成
+* 第1引数： Dispatch I/Oチャネルタイプ (DISPATCH_IO_STREAM / DISPATCH_IO_RANDOM)
+* 第2引数： ファイルディスクリプタ
+* 第3引数： 第4引数のBlockを実行するDispatch Queue
+* 第4引数： エラー発生時に実行される処理を実行するBlock
+
+### dispatch_io_set_low_water
+* 一度に読み込むサイズ (分割サイズ) を設定
+* 第1引数： dispatch_io_createで生成したDispatch I/Oチャネル
+* 第2引数: 最小読み込みサイズ (bytes)。すべてのデータを読み込みたい場合は **SIZE_MAX** を指定する
+
+### dispatch_io_read
+* Global Dispatch Queueを使って並列読み込みを実行
+* 第1引数: dispatch_io_createで生成したDispatch I/Oチャネル
+* 第2引数: オフセットサイズ。ランダムアクセスチャネルタイプの際にのみ使用するため、ストリームベースチャネルの場合は無視される
+* 第3引数: 読み込むファイルサイズ。EOFまで読み込む場合は **SIZE_MAX** を指定する
+* 第4引数: 第5引数のBlockを実行するDispatch Queue
+* 第5引数: 読み込み終了コールバック用Block
+
+### dispatch_io_handler_t
+* Dispatch I/Oチャネル上で使用されるハンドラBlock (dispatch_io_read関数の第5引数)
+* 第1引数: 処理完了判定フラグ
+* 第2引数: 処理されたデータオブジェクト。上記例では読み込まれたファイルデータ
+* 第3引数: エラーコード
+
+このようにDispatch I/Oを使用することで通常よりも高速にファイル読み込みを実装することができる。
