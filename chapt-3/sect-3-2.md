@@ -833,32 +833,32 @@ pipe_channel = dispatch_io_create(DISPATCH_IO_STREAM, fd, pipe_q, ^(int err){
 *out_fd = fdpair[1];
 dispatch_io_set_low_water(pipe_channel, SIZE_MAX);
 dispatch_io_read(pipe_channel, 0, SIZE_MAX, pipe_q,
-　　　　　　　　^(bool done, dispatch_data_t pipedata, int err){
-　　　　if (err == 0)
-　　　　{
-　　　　　　　　size_t len = dispatch_data_get_size(pipedata);
-　　　　　　　　if (len > 0)
-　　　　　　　　{
-　　　　　　　　　　　　const char *bytes = NULL;
-　　　　　　　　　　　　char *encoded;
-　　　　　　　　　　　　
-　　　　　　　　　　　　dispatch_data_t md = dispatch_data_create_map(
-　　　　　　　　　　　　　　　　pipedata, (const void **)&bytes, &len);
-　　　　　　　　　　　　encoded = asl_core_encode_buffer(bytes, len);
-　　　　　　　　　　　　asl_set((aslmsg)merged_msg, ASL_KEY_AUX_DATA, encoded);
-　　　　　　　　　　　　free(encoded);
-　　　　　　　　　　　　_asl_send_message(NULL, merged_msg, -1, NULL);
-　　　　　　　　　　　　asl_msg_release(merged_msg);
-　　　　　　　　　　　　dispatch_release(md);
-　　　　　　　　}
-　　　　}
+        ^(bool done, dispatch_data_t pipedata, int err){
+    if (err == 0)
+    {
+        size_t len = dispatch_data_get_size(pipedata);
+        if (len > 0)
+        {
+            const char *bytes = NULL;
+            char *encoded;
+　           
+            dispatch_data_t md = dispatch_data_create_map(
+                pipedata, (const void **)&bytes, &len);
+            encoded = asl_core_encode_buffer(bytes, len);
+            asl_set((aslmsg)merged_msg, ASL_KEY_AUX_DATA, encoded);
+            free(encoded);
+            _asl_send_message(NULL, merged_msg, -1, NULL);
+            asl_msg_release(merged_msg);
+            dispatch_release(md);
+        }
+    }
 
-　　　　if (done)
-　　　　{
-　　　　　　　　dispatch_semaphore_signal(sem);
-　　　　　　　　dispatch_release(pipe_channel);
-　　　　　　　　dispatch_release(pipe_q);
-　　　　}
+    if (done)
+    {
+        dispatch_semaphore_signal(sem);
+        dispatch_release(pipe_channel);
+        dispatch_release(pipe_q);
+    }
 });
 ```
 
