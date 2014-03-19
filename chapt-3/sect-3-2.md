@@ -365,13 +365,13 @@ blk0~2は複数スレッド上で並列に実行されるが、「done」は必�
 
 Dispatch Group を使うことで、すべての並列処理の実行終了を監視することができる。そしてすべての処理の実行終了を検知したら、Dispatch Queue に終了処理を追加することができる。
 
-#### dispatch\_group\_create
+### dispatch\_group\_create
 
 dispatch\_group\_create関数でdispatch\_group\_t型のDispatch Groupを生成する。
 
 dispatch\_group\_createによって生成されたDispatch Groupはdispatch\_release関数で解放する必要がある。
 
-#### dispatch\_group\_async
+### dispatch\_group\_async
 
 dispatch\_async関数と同じく、指定したDispatch QueueにBlockを追加する。
 
@@ -383,13 +383,13 @@ BlockをDispatch Groupに所属させると、そのBlockはそのDispatch Group
 
 -> **Dispatch Groupを使い終わったらすぐさまdispatch\_release関数で開放してかまわない、ということ。**
 
-#### dispatch\_group\_notify
+### dispatch\_group\_notify
 
 Dispatch Groupに追加された処理が全て実行終了した後に実行されるBlockをDispatch Queueに追加する。
 
 第1引数には監視したいDispatch Group、第3引数には全処理実行終了後に実行されるBlock、第2引数にはそのBlockを追加するDispatch Queueを指定する。
 
-#### dispatch\_group\_wait
+### dispatch\_group\_wait
 
 Dispatch Groupに所属させた全ての処理が終了するまで待機する　(同期処理)。
 
@@ -489,10 +489,146 @@ dispatch_async(queue, blk7_for_reading);
 
 そしてblk\_for\_writingが実行終了したあと、block4\_for\_reading以降を通常のConcurrent Dispatch Queueの動作で実行する。
 
-**Concurrent Dispatch Queueとdispatch\_barrier\_async関数を使って、効率の良いDB、ファイルアクセスを実装しましょう。**
+__Concurrent Dispatch Queueとdispatch\_barrier\_async関数を使って、効率の良いDB、ファイルアクセスを実装しましょう。__ 
+
 
 ## 3.2.8 dispatch\_sync
+
+dispatch\_asyncっ関数は **指定されたBlockを、指定されたDispatch Queueに「非同期処理」として追加する。** 
+
+一方、指定されたBlockを、指定されたDispatch Queueに「同期処理」として追加するにはdispatch\_sync関数を使用する。
+
+```objectivec
+dispatch_queue_t queue =
+    dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+	
+dispatch_sync(queue, ^{/* 処理*/});
+```
+
+dispatch\_sync関数を呼び出すと、指定した処理の実行が終了するまで、dispatch]}sync関数から返ってこなくなるため、簡易版dispatch\_group\_wait関数と言える。
+
+dispatch\_sync関数は簡単に使える一方で簡単に __デッドロック__ を引き起こす恐れがある。
+
+以下に例を示す。
+
+```objectivec
+dispatch_queue_t queue = dispatch_get_main_queue();
+dispatch_sync(queue, ^{NSLog(@"Hello?");});
+```
+
+このコードはメインスレッドで動く予定のBlockの実行待ちをする。これをメインスレッドで実行すると、Main Dispatch Queueに追加されたBlockが実行できなくなるためデッドロックに陥る。
+
+次の例も同様にデッドロックを引き起こす。
+
+```objectivec
+dispatch_queue_t queue = dispatch_get_main_queue();
+dispatch_async(queue, ^{
+    dispatch_sync(queue, ^{NSLog(@"Hello?");});
+});
+```
+
+Main Dispatch Queueで実行されるBlockが、Main Dispatch Queueに実行させたいBlock ("Hello?"出力処理) の実行終了を待つ。 絵に描いたようなデッドロックである。
+
+Serial Dispatch Queueでも同様のことが起こる。
+
+```objectivec
+dispatch_queue_t queue =
+    dispatch_queue_create("com.example.gcd.MySerialDispatchQueue", NULL);
+dispatch_async(queue, ^{
+    dispatch_sync(queue, ^{NSLog(@"Hello?");});
+});
+```
+
+なお、dispatch\_barrier\_async関数にasyncと入っているとおり、dispatch\_barrier\_sync関数も存在する。
+
+dispatch\_barrier\_async関数の効力である、それまでに追加されていた処理の実行終了をまってからDispatch Queueに処理を追加することに加えて、dispatch\_sync関数と同じく、その追加した処理の実行終了も待ちます。
+
+__dispatch\_synch関数など、処理の実行を同期で待つAPIはデッドロックのリスクを考慮して使用することが大切である。__
+
+
 ## 3.2.9 dispatch\_apply
+
+dispatch\_apply関数は、 **指定した回数分、指定したBlockを、指定したDispatch Queueに追加し、それらすべての処理が終了するまで待つAPIである。** 
+
+```objectivec
+dispatch_queue_t queue =
+    dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+dispatch_apply(10, queue, ^(size_t index) {
+    NSLog(@"%zu", index);
+});
+NSLog(@"done");
+```
+
+このソースコードの実行結果は次のようになる。
+
+```objectivec
+4
+1
+0
+3
+5
+2
+6
+8
+9
+7
+done
+```
+
+Global Dispatch Queueで処理を実行しているため、それぞれの処理実行タイミングは一定ではないが、dispatch\_apply関数がすべての処理実行終了を待つことによって「done」は必ず最後に出力される。
+
+第1引数は繰り返し回数、第2引数は追加対象Dispatch Queue、第3引数は追加する処理 (Block) である。
+
+今までの例とは異なり、第3引数のBlockは引数付きのBlockになっている。これは、第1引数の回数分繰り返しBlockを追加するため、それぞれのBlockを区別するために使用される。
+
+このためNSArrayクラスオブジェクトのすべてのエントリに対して処理実行を行いたい場合、forループ文を書かなくてもよくなる。
+
+```objectivec
+dispatch_queue_t queue =
+    dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+dispatch_apply([array count], queue, ^(size_t index) {
+    NSLog(@"%zu: %@", index, [array objectAtIndex:index]);
+});
+```
+
+なお、dispatch\_apply関数もdispatch\_sync関数同様に処理の実行終了を待つため、dispatch\_apply関数をdispatch\_async関数で非同期実行することをオススメする。
+
+```objectivec
+dispatch_queue_t queue =
+    dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+/*
+ * Global Dispatch Queueで非同期実行
+ */
+dispatch_async(queue, ^{
+    /*
+     * Global Dispatch Queue上で、
+     * dispatch_apply関数での処理の実行終了をすべて待つ
+     */
+    dispatch_apply([array count], queue, ^(size_t index) {
+        /*
+         * NSArrayオブジェクトに含まれるすべてのオブジェクトを並列処理
+         */
+        NSLog(@"%zu: %@", index, [array objectAtIndex:index]);
+    });
+
+    /*
+     * dispatch_apply関数での処理がすべて実行終了
+     */
+
+	/*
+     * Main Dispatch Queueで非同期実行
+     */
+    dispatch_async(dispatch_get_main_queue(), ^{
+        /*
+         * Main Dispatch Queueで処理実行
+         * ユーザーインターフェース更新など
+         */
+        NSLog(@"done");
+    });
+});
+```
+
+
 ## 3.2.10 dispatch\_suspent / dispatch\_resume
 ## 3.2.11 Dispatch Semaphore
 ## 3.2.12 dispatch\_once
