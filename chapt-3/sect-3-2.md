@@ -381,7 +381,7 @@ dispatch\_async関数との違いは、第1引数に生成したDispatch Group�
 
 BlockをDispatch Groupに所属させると、そのBlockはそのDispatch Groupをdispatch\_retain関数で所有することになり、Blockの実行が終了するとdispatch_release関数で所有していたDispatch Groupを解放する。
 
--> Dispatch Groupを使い終わったらすぐさまdispatch\_release関数で開放してかまわない、ということ。
+-> **Dispatch Groupを使い終わったらすぐさまdispatch\_release関数で開放してかまわない、ということ。**
 
 #### dispatch\_group\_notify
 
@@ -395,7 +395,7 @@ Dispatch Groupに所属させた全ての処理が終了するまで待機する
 
 第1引数には処理待ち対象のDispatch Group、第2引数にはいつまで待つかの時間 (タイムアウト) を指定する (dispatch\_time\_t型)。
 
-下記ソースコードのようにDISPATCH_TIME_FOREVERを使用するとDispatch Groupに所属させた全ての処理が終了するまで永遠に待つことを意味する。途中キャンセル不可。
+下記ソースコードのようにDISPATCH_TIME_FOREVERを使用するとDispatch Groupに所属させた全ての処理が終了するまで永遠に待つことを意味する。途中でのキャンセル不可。
 
 ```objectivec
 dispatch_queue_t queue =
@@ -442,6 +442,55 @@ long result = dispatch_group_wait(group, DISPATCH_TIME_NOW);
 
 
 ## 3.2.7 dispatch\_barrier\_async
+
+3.2.1で前述したとおり、DBやファイルへのアクセスの際にSerial Dispatch Queueを使うことでデータの強豪を回避することが可能となる。
+
+その上、読み込み処理にConcurrent Dispatch Queueを使い、書き込み処理に読み込み処理が実行されていない状態でSerial Dispatch Queueを使用することでより効率的にアクセスすることが可能となる。
+
+GCDでは、そのような処理制御をよりスマートに行うために dispatch\_barrier\_async関数を用意している。
+
+この関数は、dispatch\_queue\_create関数で生成したConcurrent Dispatch Queueとともに使用する。
+
+以下に例を示す。
+
+```objectivec
+dispatch_queue_t queue = dispatch_queue_create(
+    "com.example.gcd.ForBarrier", DISPATCH_QUEUE_CONCURRENT);
+
+dispatch_async(queue, blk0_for_reading);
+dispatch_async(queue, blk1_for_reading);
+dispatch_async(queue, blk2_for_reading);
+dispatch_async(queue, blk3_for_reading);
+dispatch_async(queue, blk4_for_reading);
+dispatch_async(queue, blk5_for_reading);
+dispatch_async(queue, blk6_for_reading);
+dispatch_async(queue, blk7_for_reading);
+
+dispatch_release(queue);
+```
+
+上記処理の内、blk3\_for\_readingとblk4\_for\_readingの間で書き込み処理を実行し、blk4\_for\_reading以降では書き込み後の内容を読み込ませる場合は以下のようにする。
+
+```objectivec
+...
+dispatch_async(queue, blk0_for_reading);
+dispatch_async(queue, blk1_for_reading);
+dispatch_async(queue, blk2_for_reading);
+dispatch_async(queue, blk3_for_reading);
+dispatch_barrier_async(queue, blk_for_writing);
+dispatch_async(queue, blk4_for_reading);
+dispatch_async(queue, blk5_for_reading);
+dispatch_async(queue, blk6_for_reading);
+dispatch_async(queue, blk7_for_reading);
+...
+```
+
+この場合dispatch\_barrier\_async関数は、Concurrent Dispatch Queueに追加されたblk0\_for\_reading~blk3\_for\_readingがすべて実行終了してから、blk\_for\_writingをConcurrent Dispatch QUeueに追加する。
+
+そしてblk\_for\_writingが実行終了したあと、block4\_for\_reading以降を通常のConcurrent Dispatch Queueの動作で実行する。
+
+**Concurrent Dispatch Queueとdispatch\_barrier\_async関数を使って、効率の良いDB、ファイルアクセスを実装しましょう。**
+
 ## 3.2.8 dispatch\_sync
 ## 3.2.9 dispatch\_apply
 ## 3.2.10 dispatch\_suspent / dispatch\_resume
