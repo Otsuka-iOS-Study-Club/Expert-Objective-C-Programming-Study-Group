@@ -841,7 +841,7 @@ dispatch_io_read(pipe_channel, 0, SIZE_MAX, pipe_q,
         {
             const char *bytes = NULL;
             char *encoded;
-　           
+
             dispatch_data_t md = dispatch_data_create_map(
                 pipedata, (const void **)&bytes, &len);
             encoded = asl_core_encode_buffer(bytes, len);
