@@ -231,7 +231,7 @@ dispatch_resume(timer);
  * キャンセル自体を諦める
  * NSOperationQueueなど別の方法を検討する
 
-### Dispatch Source
+#### Dispatch Source
 * キャンセル可能
 * キャンセル時コールバック処理をBlockの形で指定することが可能
 * XNUカーネル内で発生するイベントハンドラの実装において、kqueueを直接使うよりもDispatch Sourceを使用する方が簡単
